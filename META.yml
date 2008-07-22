@@ -1,0 +1,25 @@
+---
+name: Getopt-Modular
+version: 0.01
+author:
+  - 'Darin McBride <dmcbride@cpan.org>'
+abstract: Modular access to Getopt::Long
+license: perl
+resources:
+  license: http://dev.perl.org/licenses/
+build_requires:
+  Contextual::Return: 0.2.1
+  Exception::Class: 0
+  List::MoreUtils: 0
+  Test::Exception: 0
+  Test::More: 0
+recommends:
+  Text::Table: 0
+provides:
+  Getopt::Modular:
+    file: lib/Getopt/Modular.pm
+    version: 0.01
+generated_by: Module::Build version 0.2808
+meta-spec:
+  url: http://module-build.sourceforge.net/META-spec-v1.2.html
+  version: 1.2
