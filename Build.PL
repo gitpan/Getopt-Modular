@@ -13,6 +13,7 @@ my $builder = Module::Build->new(
         'List::MoreUtils'  => 0,
         'Exception::Class' => 0,
         'Test::Exception'  => 0,
+        'Smart::Comments'  => 0,
     },
     recommends => {
         'Text::Table' => 0,
