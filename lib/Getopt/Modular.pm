@@ -21,16 +21,14 @@ Getopt::Modular - Modular access to Getopt::Long
 
 =head1 VERSION
 
-Version 0.01
+Version 0.03
 
 =cut
 
-our $VERSION = '0.02';
+our $VERSION = '0.03';
 
 
 =head1 SYNOPSIS
-
-Quick summary of what the module does.
 
 Perhaps a little code snippet.
 
@@ -164,6 +162,8 @@ sub new {
         @_ = grep { 'global' ne lc } @_;
     }
 
+    $self->setBoolHelp(qw(off on));
+
     $self->init(@_);
 
     $self;
@@ -271,6 +271,25 @@ sub setMode
     }
 }
 
+=head2 setBoolHelp
+
+Sets the names used by getHelp and getHelpRaw for boolean values.  When your
+user checks the help for your application, we display the default or current
+values - but "0" and "1" don't make any sense for booleans for users.  So
+we, by default, use "on" and "off".  You can change this default.  You can
+further override it on a parameter-by-parameter basis.
+
+Pass in two strings: the off or false value, and the on or true value.
+(Mnemonic: index 0 is false, index 1 is true.)
+
+=cut
+
+sub setBoolHelp
+{
+    my $self = _self_or_global(shift);
+    $self->{bool_strings} = [ @_[0,1] ];
+}
+
 =head2 acceptParam
 
 Set up to accept parameters.  All parameters will be passed to L<Getopt::Long>
@@ -334,6 +353,15 @@ to provide different help for the current flag based on the valid of some other
 flag.
 
 If this is a code ref, it is not passed any parameters, and $_ is not set reliably.
+
+=item help_bool
+
+This is an array reference with the two values of boolean you want to use.
+It overrides the global strings.  e.g., [ qw(false true) ].  The unset value
+is first (mnemonic: index 0 is false, 1 is true).
+
+These strings are only used if this option is a boolean, and only in the
+help output.
 
 =item default
 
@@ -828,6 +856,14 @@ sub getHelpRaw
         my $default;
         eval {
             $opt{default} = $self->getOpt($param);
+
+            my $type = $self->_opt($param)->{spec};
+            if ($type eq '' || $type eq '!') # boolean
+            {
+                my $bools = $self->_opt($param)->{help_bool} || $self->{bool_strings};
+
+                $opt{default} = $bools->[$opt{default} ? 1 : 0];
+            }
         };
         push @raw, \%opt;
     }
@@ -846,7 +882,6 @@ sub getHelp
     my @raw = $self->getHelpRaw;
 
     require Text::Table;
-    #require Text::Wrap;
 
     my $tb = Text::Table->new();
     for my $param (@raw)
@@ -857,6 +892,59 @@ sub getHelp
 
         $tb->add($opt, $txt);
     }
+    $tb;
+}
+
+=head2 getHelpWrap
+
+Similar to getHelp, this uses Text::Wrap to automatically wrap the text
+on for help, making it easier to write.
+
+Default screen width is 80 - you can pass in the columns if you prefer.
+
+=cut
+
+sub getHelpWrap
+{
+    my $self = _self_or_global(shift);
+    my $width = @_ ? shift : 80;
+    my @raw = $self->getHelpRaw;
+
+    require Text::Table;
+    require Text::Wrap;
+
+    my $tb = Text::Table->new();
+    my $load_data = sub {
+        my $tb    = shift;
+        my $param = shift;
+
+        my $opt = join ",\n  ", @{$param->{param}};
+        my $txt = shift;
+        $txt .= "\n Default: [" . $param->{default} . "]" if exists $param->{default};
+
+        $tb->add($opt, $txt);
+    };
+
+    for my $param (@raw)
+    {
+        $load_data->($tb, $param, $param->{help});
+    }
+
+    if ($tb->width > $width)
+    {
+        # rebuild, wrapped.
+        my @colrange = $tb->colrange(0);
+        my $available = $width - $colrange[1];
+        local $Text::Wrap::columns = $available;
+
+        $tb->clear();
+        for my $param (@raw)
+        {
+            my $help = Text::Wrap::wrap('', '', $param->{help});
+            $load_data->($tb, $param, $help);
+        }
+    }
+
     $tb;
 }
 

@@ -17,6 +17,7 @@ my $builder = Module::Build->new(
     },
     recommends => {
         'Text::Table' => 0,
+        'Text::Wrap' => 0,
     },
     #create_makefile_pl => 'traditional',
 );

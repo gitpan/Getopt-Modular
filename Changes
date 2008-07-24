@@ -4,6 +4,12 @@ Revision history for Getopt-Modular
         + Core functionality released
 
 0.02    July 23, 2008
-        * Fixed missing pre-req
-        * Added Changes 
+        ! Fixed missing pre-req
+        + Added Changes 
 
+0.03    July 24, 2008
+        ! Removed some boilerplate
+        * Defaults for boolean now show up in English rather than
+          perl-bool (undef vs 1) in the help
+        + Settable boolean text
+        + Added getHelpWrap for Text::Wrapped help.
