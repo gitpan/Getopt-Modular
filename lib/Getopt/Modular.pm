@@ -5,13 +5,17 @@ use strict;
 
 use Getopt::Long;
 use Contextual::Return;
-use Smart::Comments '###';
+#use Smart::Comments '###';
 use List::MoreUtils qw(any uniq);
 use Scalar::Util qw(reftype looks_like_number);
 use Exception::Class
     'Getopt::Modular::Exception' => {
         description => 'Exception in commandline parsing/handling',
         fields => [ qw(option value) ],
+    },
+    'Getopt::Modular::Internal' => {
+        description => 'Internal Exception in commandline parsing/handling',
+        fields => [ qw(option) ]
     };
 use Carp;
 
@@ -21,11 +25,11 @@ Getopt::Modular - Modular access to Getopt::Long
 
 =head1 VERSION
 
-Version 0.03
+Version 0.04
 
 =cut
 
-our $VERSION = '0.03';
+our $VERSION = '0.04';
 
 
 =head1 SYNOPSIS
@@ -135,11 +139,11 @@ of software seems to agree that these are the same.
 
 =head2 new
 
-Construct a new options object.  If you just need a single, global options object,
-you don't need to call this.  By default, all methods can be called as package
-functions, automatically instantiating a default global object.
+Construct a new options object.  If you just need a single, global options
+object, you don't need to call this.  By default, all methods can be called
+as package functions, automatically instantiating a default global object.
 
-Takes as parameters all modes accepted by set_mode, as well as a 'global'
+Takes as parameters all modes accepted by setMode, as well as a 'global'
 mode to specify that this newly-created options object should become the
 global object, even if a global object already exists.
 
@@ -177,36 +181,31 @@ sub _self_or_global
                   $self->new();
 }
 
-sub _opt : lvalue
+sub _opt #: lvalue
 {
     my $self = _self_or_global(shift);
     my $opt  = shift;
+    
+    if (@_)
+    {
+        $self->{accept_opts}{$opt} = shift;
+        return;
+    }
 
-    LVALUE {
-        unless (ref $_ and ref $_ eq 'HASH')
+    return
+    BOOL { 
+        exists $self->{accept_opts}{$opt}
+    }
+    HASHREF {
+        unless (exists $self->{accept_opts}{$opt})
         {
-            #croak("Can only assign hashrefs here.");
-            Getopt::Modular::Exception->throw(
-                                              message => 'INTERNAL ERROR: Can only assign hashrefs here.',
-                                              opt => $opt,
-                                             );
+            Getopt::Modular::Internal->throw(
+                                             message => "Unknown option: $opt",
+                                             option  => $opt,
+                                            );
         }
-
-        $self->{accept_opts}{$opt} = $_
-    }
-    RVALUE { 
-        BOOL { exists $self->{accept_opts}{$opt} }
-        HASHREF {
-            unless (exists $self->{accept_opts}{$opt})
-            {
-                confess "Unknown option: $opt";
-            }
-            $self->{accept_opts}{$opt}
-        } 
-        VALUE {
-            confess "What the... use this as a hashref, bub!"
-        }
-    }
+        $self->{accept_opts}{$opt}
+    } 
 }
 
 =head2 init
@@ -214,7 +213,7 @@ sub _opt : lvalue
 Overridable method for initialisation.  Called during object creation to allow
 default parameters to be set up prior to any other module adding parameters.
 
-Default action is to call $self->set_mode(@_), though normally you'd set
+Default action is to call $self->setMode(@_), though normally you'd set
 any mode(s) in your own init anyway.
 
 =cut
@@ -222,7 +221,7 @@ any mode(s) in your own init anyway.
 sub init
 {
     my $self = shift;
-    $self->set_mode(@_) if @_;
+    $self->setMode(@_) if @_;
     1;
 }
 
@@ -437,8 +436,10 @@ sub acceptParam
         $opts->{aliases} = [
                             uniq
                             eval { 
-                                $self->_opt($param) ?
-                                @{$self->_opt($param)->{aliases}} : ()
+                                my $opt = $self->_opt($param);
+                                $opt ? @{$opt->{aliases} || []} : ();
+                                #$self->_opt($param) ?
+                                #    @{$self->_opt($param)->{aliases} || []} : ()
                             },
                             map { split /\|/, $_ } @$aliases
                            ];
@@ -456,7 +457,8 @@ sub acceptParam
         }
 
         delete $self->{unacceptable}{$param};
-        if ($self->_opt($param))
+        my $opt = $self->_opt($param);
+        if ($opt)
         {
             @{$self->_opt($param)}{keys %$opts} = values %$opts;
         }
@@ -465,7 +467,7 @@ sub acceptParam
             # set some defaults ...
             $opts->{spec} ||= '';
 
-            $self->_opt($param) = $opts;
+            $self->_opt($param, $opts);
         }
     }
 }
@@ -528,6 +530,7 @@ sub parseArgs
     my $warnings;
     my $success = do {
         local $SIG{__WARN__} = sub { $warnings .= "@_";};
+        Getopt::Long::Configure("bundling");
         GetOptions(\%opts, @params);
     };
     if (not $success)
@@ -583,8 +586,8 @@ sub getOpt
         {
             Getopt::Modular::Exception->throw(
                                               message => "No such option: $opt",
-                                              opt => $opt,
-                                              val => undef,
+                                              option  => $opt,
+                                              value   => undef,
                                              );
         }
     }
@@ -611,7 +614,8 @@ sub getOpt
             } VALUE {
                 $self->{options}{$opt}
             } HASHREF {
-                croak qq[can't use $opt as hash] unless ref $self->{options}{$opt} eq 'HASH';
+                Getopt::Modular::Exception->throw("Can't use $opt as a hash")
+                    unless ref $self->{options}{$opt} eq 'HASH';
                 $self->{options}{$opt}
             };
     }
@@ -860,7 +864,7 @@ sub getHelpRaw
             my $type = $self->_opt($param)->{spec};
             if ($type eq '' || $type eq '!') # boolean
             {
-                my $bools = $self->_opt($param)->{help_bool} || $self->{bool_strings};
+                my $bools = ( $self->_opt($param)->{help_bool} or $self->{bool_strings} );
 
                 $opt{default} = $bools->[$opt{default} ? 1 : 0];
             }
@@ -888,7 +892,8 @@ sub getHelp
     {
         my $opt = join ",\n  ", @{$param->{param}};
         my $txt = $param->{help};
-        $txt .= "\n Default: [" . $param->{default} . "]" if exists $param->{default};
+        no warnings 'uninitialized';
+        $txt .= "\n Current Value: [" . $param->{default} . "]" if exists $param->{default};
 
         $tb->add($opt, $txt);
     }
@@ -920,7 +925,8 @@ sub getHelpWrap
 
         my $opt = join ",\n  ", @{$param->{param}};
         my $txt = shift;
-        $txt .= "\n Default: [" . $param->{default} . "]" if exists $param->{default};
+        no warnings 'uninitialized';
+        $txt .= "\n Current Value: [" . $param->{default} . "]" if exists $param->{default};
 
         $tb->add($opt, $txt);
     };
@@ -936,6 +942,7 @@ sub getHelpWrap
         my @colrange = $tb->colrange(0);
         my $available = $width - $colrange[1];
         local $Text::Wrap::columns = $available;
+        local $Text::Wrap::unexpand;
 
         $tb->clear();
         for my $param (@raw)
@@ -1000,7 +1007,7 @@ L<http://search.cpan.org/dist/Getopt-Modular>
 
 =head1 COPYRIGHT & LICENSE
 
-Copyright 2008 Darin McBride, all rights reserved.
+Copyright 2008, 2010 Darin McBride, all rights reserved.
 
 This program is free software; you can redistribute it and/or modify it
 under the same terms as Perl itself.
