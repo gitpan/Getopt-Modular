@@ -21,3 +21,7 @@ Revision history for Getopt-Modular
           didn't seem to want to work properly.
         - Removed dependency on Smart::Comments since they're only used for
           debugging, not runtime.
+
+0.05    September 1, 2010
+        ! Gotta run all tests prior to shipping.  Fixed an erroneous test.
+
