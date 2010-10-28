@@ -1,4 +1,4 @@
-#!perl -T
+#!perl
 
 use Test::More tests => 9; #qw(no_plan); # tests => 1;
 use Data::Dumper;

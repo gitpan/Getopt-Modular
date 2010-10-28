@@ -25,3 +25,6 @@ Revision history for Getopt-Modular
 0.05    September 1, 2010
         ! Gotta run all tests prior to shipping.  Fixed an erroneous test.
 
+0.06    October 28, 2010
+        ! Remove the rest of the dependency on Contextual::Return since it
+          no longer seems to work on perl 5.8.8

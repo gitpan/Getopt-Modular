@@ -1,10 +1,10 @@
-#!perl -T
+#!perl
 
 use Test::More qw(no_plan); # tests => 1;
 
 ## due to a conflict between Test::Exception and Contextual::Return, force-
 ## load the latter to eliminate warning messages.
-use Contextual::Return;
+#use Contextual::Return;
 use Test::Exception;
 
 # for ease-of-use:

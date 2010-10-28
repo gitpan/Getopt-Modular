@@ -4,8 +4,6 @@ use warnings;
 use strict;
 
 use Getopt::Long;
-use Contextual::Return;
-#use Smart::Comments '###';
 use List::MoreUtils qw(any uniq);
 use Scalar::Util qw(reftype looks_like_number);
 use Exception::Class
@@ -29,7 +27,7 @@ Version 0.05
 
 =cut
 
-our $VERSION = '0.05';
+our $VERSION = '0.06';
 
 
 =head1 SYNOPSIS
@@ -181,7 +179,14 @@ sub _self_or_global
                   $self->new();
 }
 
-sub _opt #: lvalue
+sub _accepts_opt
+{
+    my $self = _self_or_global(shift);
+    my $opt  = shift;
+    return exists $self->{accept_opts}{$opt};
+}
+
+sub _opt
 {
     my $self = _self_or_global(shift);
     my $opt  = shift;
@@ -192,20 +197,14 @@ sub _opt #: lvalue
         return;
     }
 
-    return
-    BOOL { 
-        exists $self->{accept_opts}{$opt}
+    unless (exists $self->{accept_opts}{$opt})
+    {
+        Getopt::Modular::Internal->throw(
+                                         message => "Unknown option: $opt",
+                                         option  => $opt,
+                                        );
     }
-    HASHREF {
-        unless (exists $self->{accept_opts}{$opt})
-        {
-            Getopt::Modular::Internal->throw(
-                                             message => "Unknown option: $opt",
-                                             option  => $opt,
-                                            );
-        }
-        $self->{accept_opts}{$opt}
-    } 
+    return $self->{accept_opts}{$opt};
 }
 
 =head2 init
@@ -436,10 +435,8 @@ sub acceptParam
         $opts->{aliases} = [
                             uniq
                             eval { 
-                                my $opt = $self->_opt($param);
-                                $opt ? @{$opt->{aliases} || []} : ();
-                                #$self->_opt($param) ?
-                                #    @{$self->_opt($param)->{aliases} || []} : ()
+                                my $o = $self->_accepts_opt($param) ? $self->_opt($param) : {};
+                                @{$o->{aliases} || []};
                             },
                             map { split /\|/, $_ } @$aliases
                            ];
@@ -457,9 +454,9 @@ sub acceptParam
         }
 
         delete $self->{unacceptable}{$param};
-        my $opt = $self->_opt($param);
-        if ($opt)
+        if ($self->_accepts_opt($param))
         {
+            my $opt = $self->_opt($param);
             @{$self->_opt($param)}{keys %$opts} = values %$opts;
         }
         else
@@ -608,16 +605,11 @@ sub getOpt
     # should have one now ... check and return
     if (exists $self->{options}{$opt})
     {
-        return
-            LIST {
-                ref $self->{options}{$opt} ? @{$self->{options}{$opt}} : $self->{options}{$opt};
-            } VALUE {
-                $self->{options}{$opt}
-            } HASHREF {
-                Getopt::Modular::Exception->throw("Can't use $opt as a hash")
-                    unless ref $self->{options}{$opt} eq 'HASH';
-                $self->{options}{$opt}
-            };
+        if (wantarray)
+        {
+            return ref $self->{options}{$opt} ? @{$self->{options}{$opt}} : $self->{options}{$opt};
+        }
+        return $self->{options}{$opt}
     }
 
     return;
@@ -871,7 +863,7 @@ sub getHelpRaw
         };
         push @raw, \%opt;
     }
-    LIST { @raw };
+    return @raw;
 }
 
 =head2 getHelp

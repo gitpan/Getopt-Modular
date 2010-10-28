@@ -9,7 +9,6 @@ my $builder = Module::Build->new(
     dist_version_from   => 'lib/Getopt/Modular.pm',
     build_requires => {
         'Test::More'       => 0,
-        'Contextual::Return' => '0.2.1',
         'List::MoreUtils'  => 0,
         'Exception::Class' => 0,
         'Test::Exception'  => 0,
