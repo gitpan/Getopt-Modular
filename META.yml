@@ -18,10 +18,10 @@ name: Getopt-Modular
 provides:
   Getopt::Modular:
     file: lib/Getopt/Modular.pm
-    version: 0.06
+    version: 0.07
 recommends:
   Text::Table: 0
   Text::Wrap: 0
 resources:
   license: http://dev.perl.org/licenses/
-version: 0.06
+version: 0.07

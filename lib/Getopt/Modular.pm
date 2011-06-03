@@ -23,11 +23,11 @@ Getopt::Modular - Modular access to Getopt::Long
 
 =head1 VERSION
 
-Version 0.05
+Version 0.07
 
 =cut
 
-our $VERSION = '0.06';
+our $VERSION = '0.07';
 
 
 =head1 SYNOPSIS
@@ -36,14 +36,14 @@ Perhaps a little code snippet.
 
     use Getopt::Modular;
 
-    Getopt::Modular->accept_param(
+    Getopt::Modular->acceptParam(
                                   foo => {
                                       default => 3,
                                       spec    => '=s',
                                       validate => sub { 3 <= $_ && $_ <= determine_max_foo(); }
                                   }
                                  );
-    Getopt::Modular->parse_args();
+    Getopt::Modular->parseArgs();
     my $foo = Getopt::Modular->getOpt('foo');
 
 =head1 PURPOSE
@@ -68,18 +68,18 @@ with special code.  This can greatly simplify things:
 
 =over 4
 
-=item * consistancy
+=item * consistency
 
 Because the same parameters are used in multiple applications with the
 same meaning, spelling, valid values, etc., it makes all your applications
-consistant and easy to learn.
+consistent and thus easy to learn together.
 
 =item * help
 
 The online help is a big challenge in any application.  This module will
 handle the help for your parameters by using what is provided to it from
 each module.  Again, the help for a parameter will be the same in all your
-applications, maintaining consistancy.
+applications, maintaining consistency.
 
 Further, the help will be right beside the parameter.  No more looking
 through hundreds or thousands of lines of pod and code trying to match
@@ -95,13 +95,39 @@ separated any longer.  Now, it's true that you don't necessarily need
 to have defaults far removed with L<Getopt::Long>, but that really does
 depend on what you're doing.
 
-Further, the defaults are I<dynamic>.  That means you can put in a code
+Further, the defaults can be I<dynamic>.  That means you can put in a code
 reference to determine the default.  Your default may depend on other
 parameters, or it may depend on external environment (Is the destination
 directory writable?  What is the current hostname?  What time is it?).
 You can grab your default from a webserver from another continent (not
 recommended).  It doesn't matter.  But you can have that code right there
 with the parameter, making it easy to compartmentalise.
+
+You do not need to have dynamic defaults.  Some would argue that dynamic
+defaults make applications more difficult for the user to know what will
+happen.  Not only do I think that good dynamic defaults can help the
+application Do The Right Thing, but that the developer of the application
+should be able to choose, thus defaults I<can> be dynamic, even if that
+is not necessarily useful to your application.
+
+In one application, my goal was to minimise any requirement to pass in
+parameters, thus having defaults that made sense, but to Do The Right Thing,
+which was usually different between different environments.  As one
+example, a flag to specify mod_perl vs FastCGI vs CGI could be:
+
+    'cgi-style' => {
+        default => sub {
+            if (detect_mod_perl()) {
+                return 'mod_perl';
+            } elsif (detect_fastcgi()) {
+                return 'fastcgi';
+            } else {
+                return 'cgi';
+        }
+    }
+
+This would Do The Right Thing, but you can override it during testing
+with a simple command line parameter.
 
 =item * validation
 
@@ -132,6 +158,67 @@ Also, another downside is that parameters are not positional.  That is,
 C<--foo 3 --bar 5> is the same as C<--bar 5 --foo 3>.  The vast majority
 of software seems to agree that these are the same.
 
+=head1 IMPORTS
+
+As the module is intended to be used as a singleton (most of the time), and
+all methods are class (not object) methods, there really isn't much to import.
+However, typing out "Getopt::Modular->getOpt" all the time can be cumbersome.
+So a few pieces of syntactical sugar are provided.  Note that as sugar can
+be bad for you, these are made optional.
+
+=over 4
+
+=item * -namespace
+
+By specifying C<-namespace =E<gt> "GM">, you can abbreviate all class calls
+from C<Getopt::Modular> to simply C<GM>.  Another alternative is to simply
+create your own subclass of Getopt::Modular with a simple, short name, and
+use that.
+
+This only has to be done once per application.
+
+=item * -getOpt
+
+This will import getOpt as a simple function (not a class method) into your
+namespace.  This can be done for any namespace that needs the getOpt function
+imported.
+
+=back
+
+Arguably, more could be added.  However, as most of the calls into this
+module will be getting (not setting, etc.), this is seen as the biggest
+sugar for least setup.
+
+=cut
+
+sub import
+{
+    my $class = shift;
+    while (@_)
+    {
+        my $opt = shift;
+        if ($opt eq '-namespace')
+        {
+            my $ns = shift || die "No namespace given";
+
+            # I could do this without eval, but I'm too lazy today.
+            eval qq{
+                package $ns;
+                \@${ns}::ISA = List::MoreUtils::uniq('Getopt::Modular', \@${ns}::ISA);
+                1; } or die $@;
+        }
+        elsif ($opt eq '-getOpt')
+        {
+            my $package = caller || 'main';
+
+            # again, too lazy right now.
+            eval qq{
+                package $package;
+                sub getOpt { Getopt::Modular->getOpt(\@_) }
+                1; } or die $@;
+        }
+    }
+}
 
 =head1 FUNCTIONS
 
@@ -295,7 +382,7 @@ for actual parsing.
 
 e.g.,
 
-    Getopt::Modular->accept_param('fullname' => {
+    Getopt::Modular->acceptParam('fullname' => {
         aliases => [ 'f', 'fn' ],
         spec => '=s@', # see Getopt::Long for argument specification
         help => 'use fullname to do blah...',
@@ -311,7 +398,10 @@ Note that B<order matters>.  That is, the order that parameters are told to
 Getopt::Modular is the same order that parameters will be validated when
 accepted from the commandline, B<regardless of the order the user passes them
 in>.  If this is no good to you, then you may need to find another method
-of handling arguments.
+of handling arguments.  If one parameter depends on another, e.g., for
+the default or validation, be sure to C<use> the module that declares that
+parameter prior to calling C<acceptParam> to ensure that the other parameter
+will be registered first and thus parsed/handled first.
 
 The parameter name is given separately.  Note that whatever this is will be
 the name used when you retrieve the option.  I suggest you use the longest
@@ -363,13 +453,13 @@ help output.
 
 =item default
 
-This is either a scalar, an array ref (if C<spec> includes C<@>), a hash ref (if
-C<spec> includes C<%>), or a code ref that returns the appropriate type.  A code
-ref can provide the opportunity to change the default for a given parameter based
-on the values of other parameters.  Note that you can only rely on the values
-of parameters that have already been validated, i.e., parameters that were
-given to accept_param earlier than this one.  That's because ones given later
-would not have had their values set from the command line yet.
+This is either a scalar, an array ref (if C<spec> includes C<@>), a hash ref
+(if C<spec> includes C<%>), or a code ref that returns the appropriate type.
+A code ref can provide the opportunity to change the default for a given
+parameter based on the values of other parameters.  Note that you can only rely
+on the values of parameters that have already been validated, i.e., parameters
+that were given to acceptParam earlier than this one.  That's because ones
+given later would not have had their values set from the command line yet.
 
 This is checked/called only once, maximum, per process, as once the default is
 retrieved, it is stored as if it were set by the user via the command line.  It
@@ -378,7 +468,8 @@ time the code requests the value of this parameter.  If the current code path
 does not check this value, the default will not be checked or called even if
 the parameter is not passed in on the command line.
 
-If this is a code ref, it is not passed any parameters, and $_ is not set reliably.
+If this is a code ref, it is not passed any parameters, and $_ is not set
+reliably.
 
 =item validate
 
@@ -408,7 +499,11 @@ will be accepted as valid.
 
 If this is set to a true value, then during parameter validation, this option
 will always be set, either via the command line, or via checking/calling default
-(which will then be validated).
+(which will then be validated).  The purpose of this is to ensure the validate
+code is called during the parsing of arguments even if the parameter was not
+passed in on the command line.  If you have no default and your validate
+rejects an empty value, this can, in effect, make the parameter mandatory for
+the user.
 
 =back
 
@@ -421,9 +516,9 @@ sub acceptParam
     {
         my $param = shift;
         my $opts = shift;
-        
+
         my $aliases = exists $opts->{aliases} ? ref $opts->{aliases} ? $opts->{aliases} : [ $opts->{aliases} ] : [];
-        
+
         if ($param =~ /\|/)
         {
             ($param, my @aliases) = split /\|/, $param;
@@ -482,7 +577,7 @@ will recognise inside the code.  That is, Getopt::Modular->getOpt() will
 still accept that parameter, and setOpt will still allow you to set it
 programmatically.
 
-To re-accept an unaccepted parameter, simply call accept_param, passing
+To re-accept an unaccepted parameter, simply call acceptParam, passing
 in the parameter name and an empty hash of options, and all the old values
 will be used.
 
@@ -502,7 +597,7 @@ sub unacceptParam
 =head2 parseArgs
 
 Once all parameters have been accepted (and, possibly, unaccepted), you must
-call parse_args to perform the actual parsing.
+call parseArgs to perform the actual parsing.
 
 =cut
 
@@ -521,7 +616,6 @@ sub parseArgs
         # skip unaccepted parameters
         $unaccept and not $unaccept->{$_}
     } keys %$accept;
-    #### @params
 
     # parse them
     my $warnings;
@@ -536,22 +630,19 @@ sub parseArgs
              message => "Bad command-line: $warnings",
             );
     }
-    #### %opts
     
     # now validate everything that was passed in, and save it.
     for my $opt (keys %$accept)
     {
-        #### $opt
         if (exists $opts{$opt})
         {
-            #### $opts{$opt}
             $self->setOpt($opt, $opts{$opt});
         }
         # if it's mandatory, get it - that will call the default and
         # set it.
         elsif ($accept->{$opt}{mandatory})
         {
-            #### setting via default...
+            # setting via default.
             $self->getOpt($opt);
         }
     }
@@ -831,19 +922,16 @@ sub getHelpRaw
 
         my $param_info = $accept->{$param};
         my @keys = ($param, @{$param_info->{aliases}});
-        #### @keys
 
         # booleans get the "no" version.
         if ($param_info->{spec} =~ /!/)
         {
             @keys = map { length > 1 ? ($_, "no$_") : $_ } @keys;
         }
-        #### @keys
 
         # anything with more than one letter gets a double-dash.
         @keys = map { length > 1 ? "--$_" : "-$_" } @keys;
         $opt{param} = \@keys;
-        #### @keys
 
         $opt{help} = ref $param_info->{help} ?
             $param_info->{help}->() : $param_info->{help};
@@ -999,7 +1087,7 @@ L<http://search.cpan.org/dist/Getopt-Modular>
 
 =head1 COPYRIGHT & LICENSE
 
-Copyright 2008, 2010 Darin McBride, all rights reserved.
+Copyright 2008, 2011 Darin McBride, all rights reserved.
 
 This program is free software; you can redistribute it and/or modify it
 under the same terms as Perl itself.
