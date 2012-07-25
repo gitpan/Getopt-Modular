@@ -3,21 +3,20 @@
 use Test::More tests => 9; #qw(no_plan); # tests => 1;
 use Data::Dumper;
 
-# for ease-of-use:
-package GM;
-use Test::More;
 BEGIN {
-    use_ok( 'base', 'Getopt::Modular');
+    use_ok( 'Getopt::Modular', -namespace => 'GM' );
 }
 
-package main;
 
 # autosplit of aliases
 GM->acceptParam(
                  'fullname|fn|f' => {
                  }
                 );
-my $secret = GM->_self_or_global();
+
+# this isn't the right way to load this, but should be a good approximate
+# test of the right way.
+my $secret = Getopt::Modular::_self_or_global(['GM']);
 is(ref $secret, 'GM', 'Check Derivation') or
     diag(Dumper $secret);
 

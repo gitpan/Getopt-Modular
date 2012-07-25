@@ -1,24 +1,46 @@
+
 use strict;
 use warnings;
-use Module::Build;
 
-my $builder = Module::Build->new(
-    module_name         => 'Getopt::Modular',
-    license             => 'perl',
-    dist_author         => 'Darin McBride <dmcbride@cpan.org>',
-    dist_version_from   => 'lib/Getopt/Modular.pm',
-    build_requires => {
-        'Test::More'       => 0,
-        'List::MoreUtils'  => 0,
-        'Exception::Class' => 0,
-        'Test::Exception'  => 0,
-        #'Smart::Comments'  => 0,
-    },
-    recommends => {
-        'Text::Table' => 0,
-        'Text::Wrap' => 0,
-    },
-    #create_makefile_pl => 'traditional',
+use Module::Build 0.3601;
+
+
+my %module_build_args = (
+  "build_requires" => {
+    "Data::Dumper" => 0,
+    "Module::Build" => "0.3601",
+    "Test::Exception" => 0,
+    "Test::More" => 0
+  },
+  "configure_requires" => {
+    "Module::Build" => "0.3601"
+  },
+  "dist_abstract" => "Modular access to Getopt::Long",
+  "dist_author" => [
+    "Darin McBride <dmcbride\@cpan.org>"
+  ],
+  "dist_name" => "Getopt-Modular",
+  "dist_version" => "0.08",
+  "license" => "perl",
+  "module_name" => "Getopt::Modular",
+  "recommends" => {},
+  "recursive_test_files" => 1,
+  "requires" => {
+    "Carp" => 0,
+    "Exception::Class" => 0,
+    "Getopt::Long" => 0,
+    "List::MoreUtils" => 0,
+    "Scalar::Util" => 0,
+    "Text::Table" => 0,
+    "Text::Wrap" => 0,
+    "Text::WrapI18N" => 0,
+    "strict" => 0,
+    "warnings" => 0
+  },
+  "script_files" => []
 );
 
-$builder->create_build_script();
+
+my $build = Module::Build->new(%module_build_args);
+
+$build->create_build_script;

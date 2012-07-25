@@ -3,16 +3,11 @@
 use Test::More qw(no_plan);
 use Data::Dumper;
 
-## due to a conflict between Test::Exception and Contextual::Return, force-
-## load the latter to eliminate warning messages.
-#use Contextual::Return;
 use Test::Exception;
-
-# for ease-of-use:
-package GM;
 use Test::More;
+
 BEGIN {
-    use_ok( 'base', 'Getopt::Modular');
+    use_ok( 'Getopt::Modular', -namespace => 'GM' );
 }
 
 my $imand_set = 0;
@@ -43,8 +38,6 @@ GM->acceptParam(
                  },
                 );
 
-package main;
-
 @ARGV = qw(
     --Integer 8
     -f 3.145
@@ -74,5 +67,5 @@ do {
         );
     dies_ok {GM->parseArgs()} 'rejects unaccepted parameter';
     my $e = Exception::Class->caught();
-    like($e->message(), qr/Bad command-line/, 'Checking error');
+    like($e->message(), qr/Bad command-line/, 'Checking error') or diag explain $e;
 };

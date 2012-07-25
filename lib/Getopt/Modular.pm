@@ -1,4 +1,9 @@
 package Getopt::Modular;
+{
+  $Getopt::Modular::VERSION = '0.08';
+}
+
+#ABSTRACT: Modular access to Getopt::Long
 
 use warnings;
 use strict;
@@ -9,13 +14,665 @@ use Scalar::Util qw(reftype looks_like_number);
 use Exception::Class
     'Getopt::Modular::Exception' => {
         description => 'Exception in commandline parsing/handling',
-        fields => [ qw(option value) ],
+        fields => [ qw(type option value warning) ],
     },
     'Getopt::Modular::Internal' => {
         description => 'Internal Exception in commandline parsing/handling',
-        fields => [ qw(option) ]
+        fields => [ qw(type option) ]
     };
 use Carp;
+
+
+sub import
+{
+    my $class = shift;
+    while (@_)
+    {
+        my $opt = shift;
+        if ($opt eq '-namespace')
+        {
+            my $ns = shift || die "No namespace given";
+
+            # I could do this without eval, but I'm too lazy today.
+            eval qq{
+                package $ns;
+                \@${ns}::ISA = List::MoreUtils::uniq('Getopt::Modular', \@${ns}::ISA);
+                1; } or die $@;
+        }
+        elsif ($opt eq '-getOpt')
+        {
+            my $package = caller || 'main';
+
+            # again, too lazy right now.
+            eval qq{
+                package $package;
+                sub getOpt { Getopt::Modular->getOpt(\@_) }
+                1; } or die $@;
+        }
+    }
+}
+
+
+my $global;
+sub new {
+    my $class = shift;
+    my $self = {};
+    bless $self, $class;
+
+    # do we have a global one yet?
+    $global ||= $self;
+
+    if (any {'global' eq lc} @_)
+    {
+        $global = $self;
+        @_ = grep { 'global' ne lc } @_;
+    }
+
+    $self->setBoolHelp(qw(off on));
+
+    $self->init(@_);
+
+    $self;
+}
+
+sub _self_or_global
+{
+    my $underscore = shift;
+    my $self = $underscore->[0];
+
+    # is it an object? use it.
+    eval { ref $self && $self->isa(__PACKAGE__) } && return shift @$underscore;
+
+    # passed in via class method?  skip it.
+    eval { not ref && $self->isa(__PACKAGE__) } && shift @$underscore;
+
+    # have global? use it.
+    $global ? $global :
+        # otherwise, create new.
+        $self->new();
+}
+
+sub _accepts_opt
+{
+    my $self = _self_or_global(\@_);
+    my $opt  = shift;
+    return exists $self->{accept_opts}{$opt};
+}
+
+sub _opt
+{
+    my $self = _self_or_global(\@_);
+    my $opt  = shift;
+    
+    if (@_)
+    {
+        $self->{accept_opts}{$opt} = shift;
+        return;
+    }
+
+    unless (exists $self->{accept_opts}{$opt})
+    {
+        Getopt::Modular::Internal->throw(
+                                         type    => 'unknown-option',
+                                         message => "Unknown option: $opt",
+                                         option  => $opt,
+                                        );
+    }
+    return $self->{accept_opts}{$opt};
+}
+
+
+sub init
+{
+    my $self = shift;
+    $self->setMode(@_) if @_;
+    1;
+}
+
+
+my %_known_modes = map { $_ => 1 } qw(
+    strict
+);
+
+sub setMode
+{
+    my $self = _self_or_global(\@_);
+
+    foreach my $mode (@_)
+    {
+        if ($_known_modes{$mode})
+        {
+            $self->{mode}{$mode}++;
+        }
+        else
+        {
+            croak "Unknown mode: $@";
+        }
+    }
+}
+
+
+sub setBoolHelp
+{
+    my $self = _self_or_global(\@_);
+    $self->{bool_strings} = [ @_[0,1] ];
+}
+
+
+sub acceptParam
+{
+    my $self = _self_or_global(\@_);
+    while (@_)
+    {
+        my $param = shift;
+        my $opts = shift;
+
+        my $aliases = exists $opts->{aliases} ? ref $opts->{aliases} ? $opts->{aliases} : [ $opts->{aliases} ] : [];
+
+        if ($param =~ /\|/)
+        {
+            ($param, my @aliases) = split /\|/, $param;
+            unshift @$aliases, @aliases;
+        }
+
+        # if any of the aliases have pipes, split them up.  Needed to provide
+        # the help screen.
+        $opts->{aliases} = [
+                            uniq
+                            eval { 
+                                my $o = $self->_accepts_opt($param) ? $self->_opt($param) : {};
+                                @{$o->{aliases} || []};
+                            },
+                            map { split /\|/, $_ } @$aliases
+                           ];
+
+        # check if this flag already exists (other than as main name)
+        for (@{$opts->{aliases}})
+        {
+            if (exists $self->{all_opts}{$_} and
+                $self->{all_opts}{$_} ne $param)
+            {
+                croak "$_ already used by $self->{all_opts}{$_}";
+            }
+            # save this as the owner
+            $self->{all_opts}{$_} = $param;
+        }
+
+        delete $self->{unacceptable}{$param};
+        if ($self->_accepts_opt($param))
+        {
+            my $opt = $self->_opt($param);
+            @{$self->_opt($param)}{keys %$opts} = values %$opts;
+        }
+        else
+        {
+            # set some defaults ...
+            $opts->{spec} ||= '';
+
+            $self->_opt($param, $opts);
+        }
+    }
+}
+
+
+sub unacceptParam
+{
+    my $self = _self_or_global(\@_);
+    for my $param (@_)
+    {
+        $self->{unacceptable}{$param} = 1;
+        my @x =
+        delete @{$self->{all_opts}}{@{$self->{accept_opts}{$param}{aliases}}};
+    }
+}
+
+
+sub parseArgs
+{
+    my $self = _self_or_global(\@_);
+
+    # first, gather up for the call to Getopt::Long.
+    my %opts;
+    my $accept    = $self->{accept_opts};
+    my $unaccept  = $self->{unacceptable};
+    my @params = map {
+        my $param = join '|', $_, @{$accept->{$_}{aliases}};
+        $param . ($accept->{$_}{spec} || '');
+    } grep {
+        # skip unaccepted parameters
+        $unaccept and not $unaccept->{$_}
+    } keys %$accept;
+
+    # parse them
+    my $warnings;
+    my $success = do {
+        local $SIG{__WARN__} = sub { $warnings .= "@_";};
+        Getopt::Long::Configure("bundling");
+        GetOptions(\%opts, @params);
+    };
+    if (not $success)
+    {
+        Getopt::Modular::Exception->throw(
+                                          message => "Bad command-line: $warnings",
+                                          type => 'getopt-long-failure',
+                                          warning => $warnings,
+                                         );
+    }
+
+    # now validate everything that was passed in, and save it.
+    for my $opt (keys %$accept)
+    {
+        if (exists $opts{$opt})
+        {
+            $self->setOpt($opt, $opts{$opt});
+        }
+        # if it's mandatory, get it - that will call the default and
+        # set it.
+        elsif ($accept->{$opt}{mandatory})
+        {
+            # setting via default.
+            $self->getOpt($opt);
+        }
+    }
+}
+
+
+sub getOpt
+{
+    my $self = _self_or_global(\@_);
+    my $opt  = shift || Getopt::Modular::Exception->throw(
+                                                          message => 'No option given?',
+                                                          type => 'dev-error',
+                                                         );
+
+    if (not exists $self->{accept_opts}{$opt})
+    {
+        if ($self->{mode}{strict})
+        {
+            Getopt::Modular::Exception->throw(
+                                              message => "No such option: $opt",
+                                              type    => 'no-such-option',
+                                              option  => $opt,
+                                              value   => undef,
+                                             );
+        }
+    }
+
+    # If we don't have it yet, check if there's a default.
+    if (not exists $self->{options}{$opt} and
+        exists $self->{accept_opts}{$opt} and
+        exists $self->{accept_opts}{$opt}{default})
+    {
+        my @default = $self->{accept_opts}{$opt}{default};
+        if (ref $default[0] and ref $default[0] eq 'CODE')
+        {
+            @default = $default[0]->();
+        }
+        $self->setOpt($opt, @default);
+    }
+
+    # should have one now ... check and return
+    if (exists $self->{options}{$opt})
+    {
+        if (wantarray)
+        {
+            return ref $self->{options}{$opt} ? @{$self->{options}{$opt}} : $self->{options}{$opt};
+        }
+        return $self->{options}{$opt}
+    }
+
+    return;
+}
+
+sub _getType
+{
+    my $self = _self_or_global(\@_);
+    my $opt  = shift;
+
+    unless (exists $self->_opt($opt)->{_GMTYPE})
+    {
+        my $type = $self->_opt($opt)->{spec};
+        $self->_opt($opt)->{_GMTYPE} = ''; #scalar
+        if ($type =~ /\@/)
+        {
+            $self->_opt($opt)->{_GMTYPE} = 'ARRAY';
+        }
+        elsif ($type =~ /\%/)
+        {
+            $self->_opt($opt)->{_GMTYPE} = 'HASH';
+        }
+    }
+    $self->_opt($opt)->{_GMTYPE}
+}
+
+sub _bool_val
+{
+    # technically, perl allows anything to be boolean.
+    #my ($opt,$val) = @_;
+}
+
+sub _int_val
+{
+    my ($opt,$val) = @_;
+    if ($val =~ /\D/)
+    {
+        Getopt::Modular::Exception->throw(
+                                          message => "Trying to set '$opt' (an integer-only parameter) to '$val'",
+                                          type    => 'set-int-failure',
+                                          option  => $opt,
+                                          value   => $val
+                                         );
+    }
+}
+
+sub _real_val
+{
+    my ($opt,$val) = @_;
+
+    unless (looks_like_number $val)
+    {
+        Getopt::Modular::Exception->throw(
+                                          message => "Trying to set '$opt' (a real-number parameter) to '$val'",
+                                          type    => 'set-real-failure',
+                                          option  => $opt,
+                                          value   => $val
+                                         );
+    }
+}
+
+my %_valtypes = (
+                 '!' => { val => \&_bool_val },
+                 '+' => { val => \&_int_val },
+                 's' => { val => sub {} },
+                 'i' => { val => \&_int_val },
+                 'o' => { val => \&_int_val },
+                 'f' => { val => \&_real_val },
+                );
+
+sub _setOpt
+{
+    my $self = _self_or_global(\@_);
+    my $opt  = shift;
+    my $val  = shift;
+
+    # check known types before passing on to user-specified validation.
+
+    my $type = $self->_opt($opt)->{spec};
+    if ($type eq '' || $type eq '!') # boolean
+    {
+        _bool_val($opt,$val);
+        # extra information should not be stored in a boolean.
+        $val = !!$val;
+    }
+    else
+    {
+        for (split //, $type)
+        {
+            if (my $info = $_valtypes{$_})
+            {
+                if ($type =~ /\@/)
+                {
+                    $info->{val}->($opt,$_) for @$val;
+                }
+                elsif ($type =~ /\%/)
+                {
+                    $info->{val}->($opt,$_) for values %$val;
+                }
+                else
+                {
+                    $info->{val}->($opt,$val);
+                }
+            }
+        }
+    }
+
+    if ($self->_opt($opt)->{validate})
+    {
+        local $_ = $val;
+        unless ($self->_opt($opt)->{validate}->())
+        {
+            if (ref $val)
+            {
+                $val = join ',', @$val if ref $val eq 'ARRAY';
+                $val = join ',', map { "$_=$val->{$_}" } sort keys %$val if ref $val eq 'HASH';
+            }
+            Getopt::Modular::Exception->throw(
+                                              message => "'$val' is an invalid value for $opt",
+                                              type    => 'validate-failure',
+                                              option  => $opt,
+                                              value   => $val,
+                                             );
+        }
+    }
+
+    if (my $valid = $self->_opt($opt)->{valid_values})
+    {
+        if (ref $valid eq 'CODE')
+        {
+            my @valid = $valid->();
+            $valid = \@valid;
+            $self->_opt($opt)->{valid_values} = $valid; # cache for next time.
+        }
+
+        if (ref $valid eq 'ARRAY')
+        {
+            unless (any { $_ eq $val } @$valid)
+            {
+                Getopt::Modular::Exception->throw(
+                                                  message => "'$val' is an invalid value for $opt",
+                                                  type    => 'validate-failure',
+                                                  option  => $opt,
+                                                  value   => $val,
+                                                  valid   => $valid,
+                                                 );
+            }
+        }
+        else
+        {
+            Getopt::Modular::Exception->throw(
+                                              message => "'valid_values requires either an array ref or a code ref to generate the list of valid values.",
+                                              type => 'valid-values-error',
+                                              option => $opt,
+                                             );
+        }
+    }
+
+    $self->{options}{$opt} = $val;
+}
+
+
+sub setOpt
+{
+    my $self = _self_or_global(\@_);
+    my $opt  = shift;
+    my $val  = do {
+        if (ref $_[0])
+        {
+            Getopt::Modular::Exception->throw(
+                                              type    => 'wrong-type',
+                                              message => "Wrong type of data for $opt.  Expected: " .
+                                              ($self->_getType($opt) || 'SCALAR') .
+                                              " got: " . (reftype $_[0] || 'SCALAR'),
+                                              expected => ($self->_getType($opt) || 'SCALAR'),
+                                              opt => $opt,
+                                              value => $_[0],
+                                             )
+                unless $self->_getType($opt) eq reftype $_[0];
+
+            # if it's a reference, pass it in unchanged.
+            shift;
+        }
+        else
+        {
+            # scalars get passed in, but hashes and arrays need to
+            # be referencised.
+
+            ! $self->_getType($opt) ? shift  :
+                $self->_getType($opt) eq 'HASH'  ? { @_ } : [ @_ ];
+        }
+    };
+
+    $self->_setOpt($opt, $val);
+}
+
+
+sub getHelpRaw
+{
+    my $self = _self_or_global(\@_);
+
+    # get the list of parameters ...
+    my $accept    = $self->{accept_opts};
+    my $unaccept  = $self->{unacceptable};
+    my @params = sort grep {
+        # skip unaccepted parameters
+        $unaccept and not $unaccept->{$_}
+    } keys %$accept;
+
+    # start figuring it out.
+    my @raw;
+    for my $param (@params)
+    {
+        my %opt;
+
+        my $param_info = $accept->{$param};
+        my @keys = ($param, @{$param_info->{aliases}});
+
+        # booleans get the "no" version.
+        if ($param_info->{spec} =~ /!/)
+        {
+            @keys = map { length > 1 ? ($_, "no$_") : $_ } @keys;
+        }
+
+        # anything with more than one letter gets a double-dash.
+        @keys = map { length > 1 ? "--$_" : "-$_" } @keys;
+        $opt{param} = \@keys;
+
+        $opt{help} = ref $param_info->{help} ?
+            $param_info->{help}->() : $param_info->{help};
+
+        # determine default (or set value)
+        my $default;
+        eval {
+            $opt{default} = $self->getOpt($param);
+
+            my $type = $self->_opt($param)->{spec};
+            if ($type eq '' || $type eq '!') # boolean
+            {
+                my $bools = ( $self->_opt($param)->{help_bool} or $self->{bool_strings} );
+
+                $opt{default} = $bools->[$opt{default} ? 1 : 0];
+            }
+        };
+
+        # determine valid values.
+        eval {
+            $opt{valid_values} = $self->_opt($param)->{valid_values};
+
+            no warnings;
+            # if it's not a code ref, the eval will exit, but we'll already
+            # have what we want anyway.
+            $opt{valid_values} = $opt{valid_values}->();
+        };
+
+        push @raw, \%opt;
+    }
+    return @raw;
+}
+
+
+sub getHelp
+{
+    my $self = _self_or_global(\@_);
+    my @raw = $self->getHelpRaw;
+    my $cbs = shift || {};
+
+    require Text::Table;
+
+    my $tb = Text::Table->new();
+    for my $param (@raw)
+    {
+        my $opt = join ",\n  ", @{$param->{param}};
+        my $txt = $param->{help};
+        no warnings 'uninitialized';
+
+        $txt .= "\n " . ($cbs->{current_value} || sub { "Current value: [". shift(). "]" })->($param->{default}) if exists $param->{default};
+        $txt .= "\n " . ($cbs->{valid_values} || sub { "Valid values: [". join(',', @_). "]" })->(@{$param->{valid_values}}) if $param->{valid_values};
+
+        $tb->add($opt, $txt);
+    }
+    $tb;
+}
+
+
+sub getHelpWrap
+{
+    my $self = _self_or_global(\@_);
+    my $width = (@_ && not ref $_[0]) ? shift : 80;
+    my $cbs = shift || {};
+    my @raw = $self->getHelpRaw;
+
+    require Text::Table;
+
+    my $wrap = eval {
+        require Text::WrapI18N;
+        sub {
+            local $Text::WrapI18N::columns = shift;
+            local $Text::WrapI18N::unexpand;
+
+            Text::WrapI18N::wrap('', '', @_);
+        };
+    } || do {
+        require Text::Wrap;
+        sub {
+            local $Text::Wrap::columns = shift;
+            local $Text::Wrap::unexpand;
+
+            Text::Wrap::wrap('', '', @_);
+        }
+    };
+
+    my $tb = Text::Table->new();
+    my $load_data = sub {
+        my $tb    = shift;
+        my $param = shift;
+
+        my $opt = join ",\n  ", @{$param->{param}};
+        my $txt = shift;
+        no warnings 'uninitialized';
+
+        $txt .= "\n " . ($cbs->{current_value} || sub { "Current value: [". shift(). "]" })->($param->{default}) if exists $param->{default};
+        $txt .= "\n " . ($cbs->{valid_values} || sub { "Valid values: [". join(',', @_). "]" })->(@{$param->{valid_values}}) if $param->{valid_values};
+
+        $tb->add($opt, $txt);
+    };
+
+    for my $param (@raw)
+    {
+        $load_data->($tb, $param, $param->{help});
+    }
+
+    if ($tb->width > $width)
+    {
+        # rebuild, wrapped.
+        my @colrange = $tb->colrange(0);
+        my $available = $width - $colrange[1];
+
+        $tb->clear();
+        for my $param (@raw)
+        {
+            my $help = $wrap->($available, $param->{help});
+            $load_data->($tb, $param, $help);
+        }
+    }
+
+    $tb;
+}
+
+
+1; # End of Getopt::Modular
+
+__END__
+=pod
 
 =head1 NAME
 
@@ -23,12 +680,7 @@ Getopt::Modular - Modular access to Getopt::Long
 
 =head1 VERSION
 
-Version 0.07
-
-=cut
-
-our $VERSION = '0.07';
-
+version 0.08
 
 =head1 SYNOPSIS
 
@@ -40,7 +692,10 @@ Perhaps a little code snippet.
                                   foo => {
                                       default => 3,
                                       spec    => '=s',
-                                      validate => sub { 3 <= $_ && $_ <= determine_max_foo(); }
+                                      validate => sub {
+                                          3 <= $_ &&
+                                          $_ <= determine_max_foo();
+                                      }
                                   }
                                  );
     Getopt::Modular->parseArgs();
@@ -189,37 +844,6 @@ Arguably, more could be added.  However, as most of the calls into this
 module will be getting (not setting, etc.), this is seen as the biggest
 sugar for least setup.
 
-=cut
-
-sub import
-{
-    my $class = shift;
-    while (@_)
-    {
-        my $opt = shift;
-        if ($opt eq '-namespace')
-        {
-            my $ns = shift || die "No namespace given";
-
-            # I could do this without eval, but I'm too lazy today.
-            eval qq{
-                package $ns;
-                \@${ns}::ISA = List::MoreUtils::uniq('Getopt::Modular', \@${ns}::ISA);
-                1; } or die $@;
-        }
-        elsif ($opt eq '-getOpt')
-        {
-            my $package = caller || 'main';
-
-            # again, too lazy right now.
-            eval qq{
-                package $package;
-                sub getOpt { Getopt::Modular->getOpt(\@_) }
-                1; } or die $@;
-        }
-    }
-}
-
 =head1 FUNCTIONS
 
 =head2 new
@@ -234,66 +858,6 @@ global object, even if a global object already exists.
 
 Note that if no global object exists, the first call to new will create it.
 
-=cut
-
-my $global;
-sub new {
-    my $class = shift;
-    my $self = {};
-    bless $self, $class;
-
-    # do we have a global one yet?
-    $global ||= $self;
-
-    if (any {'global' eq lc} @_)
-    {
-        $global = $self;
-        @_ = grep { 'global' ne lc } @_;
-    }
-
-    $self->setBoolHelp(qw(off on));
-
-    $self->init(@_);
-
-    $self;
-}
-
-sub _self_or_global
-{
-    my $self = shift;
-    ref $self   ? $self :
-        $global ? $global :
-                  $self->new();
-}
-
-sub _accepts_opt
-{
-    my $self = _self_or_global(shift);
-    my $opt  = shift;
-    return exists $self->{accept_opts}{$opt};
-}
-
-sub _opt
-{
-    my $self = _self_or_global(shift);
-    my $opt  = shift;
-    
-    if (@_)
-    {
-        $self->{accept_opts}{$opt} = shift;
-        return;
-    }
-
-    unless (exists $self->{accept_opts}{$opt})
-    {
-        Getopt::Modular::Internal->throw(
-                                         message => "Unknown option: $opt",
-                                         option  => $opt,
-                                        );
-    }
-    return $self->{accept_opts}{$opt};
-}
-
 =head2 init
 
 Overridable method for initialisation.  Called during object creation to allow
@@ -301,15 +865,6 @@ default parameters to be set up prior to any other module adding parameters.
 
 Default action is to call $self->setMode(@_), though normally you'd set
 any mode(s) in your own init anyway.
-
-=cut
-
-sub init
-{
-    my $self = shift;
-    $self->setMode(@_) if @_;
-    1;
-}
 
 =head2 setMode
 
@@ -333,29 +888,6 @@ go with L<Getopt::Long> anyway.
 
 =back
 
-=cut
-
-my %_known_modes = map { $_ => 1 } qw(
-    strict
-);
-
-sub setMode
-{
-    my $self = _self_or_global(shift);
-
-    foreach my $mode (@_)
-    {
-        if ($_known_modes{$mode})
-        {
-            $self->{mode}{$mode}++;
-        }
-        else
-        {
-            croak "Unknown mode: $@";
-        }
-    }
-}
-
 =head2 setBoolHelp
 
 Sets the names used by getHelp and getHelpRaw for boolean values.  When your
@@ -366,14 +898,6 @@ further override it on a parameter-by-parameter basis.
 
 Pass in two strings: the off or false value, and the on or true value.
 (Mnemonic: index 0 is false, index 1 is true.)
-
-=cut
-
-sub setBoolHelp
-{
-    my $self = _self_or_global(shift);
-    $self->{bool_strings} = [ @_[0,1] ];
-}
 
 =head2 acceptParam
 
@@ -495,6 +1019,16 @@ choice.
 If this key is not present, then anything Getopt::Long accepts (due to the specification)
 will be accepted as valid.
 
+=item valid_values
+
+If the list of valid values is limited and finite, it may be easier to
+just specify them.  Then Getopt::Modular can verify the value provided is
+in the list.  It can also use the list in the help.
+
+This parameter needs to be either an array ref, or a CODE ref that generates
+the list (lazy).  Note that the CODE ref will only be called once, so don't
+count on it being dynamic, too.
+
 =item mandatory
 
 If this is set to a true value, then during parameter validation, this option
@@ -506,63 +1040,6 @@ rejects an empty value, this can, in effect, make the parameter mandatory for
 the user.
 
 =back
-
-=cut
-
-sub acceptParam
-{
-    my $self = _self_or_global(shift);
-    while (@_)
-    {
-        my $param = shift;
-        my $opts = shift;
-
-        my $aliases = exists $opts->{aliases} ? ref $opts->{aliases} ? $opts->{aliases} : [ $opts->{aliases} ] : [];
-
-        if ($param =~ /\|/)
-        {
-            ($param, my @aliases) = split /\|/, $param;
-            unshift @$aliases, @aliases;
-        }
-
-        # if any of the aliases have pipes, split them up.  Needed to provide
-        # the help screen.
-        $opts->{aliases} = [
-                            uniq
-                            eval { 
-                                my $o = $self->_accepts_opt($param) ? $self->_opt($param) : {};
-                                @{$o->{aliases} || []};
-                            },
-                            map { split /\|/, $_ } @$aliases
-                           ];
-
-        # check if this flag already exists (other than as main name)
-        for (@{$opts->{aliases}})
-        {
-            if (exists $self->{all_opts}{$_} and
-                $self->{all_opts}{$_} ne $param)
-            {
-                croak "$_ already used by $self->{all_opts}{$_}";
-            }
-            # save this as the owner
-            $self->{all_opts}{$_} = $param;
-        }
-
-        delete $self->{unacceptable}{$param};
-        if ($self->_accepts_opt($param))
-        {
-            my $opt = $self->_opt($param);
-            @{$self->_opt($param)}{keys %$opts} = values %$opts;
-        }
-        else
-        {
-            # set some defaults ...
-            $opts->{spec} ||= '';
-
-            $self->_opt($param, $opts);
-        }
-    }
-}
 
 =head2 unacceptParam
 
@@ -581,72 +1058,10 @@ To re-accept an unaccepted parameter, simply call acceptParam, passing
 in the parameter name and an empty hash of options, and all the old values
 will be used.
 
-=cut
-
-sub unacceptParam
-{
-    my $self = _self_or_global(shift);
-    for my $param (@_)
-    {
-        $self->{unacceptable}{$param} = 1;
-        my @x =
-        delete @{$self->{all_opts}}{@{$self->{accept_opts}{$param}{aliases}}};
-    }
-}
-
 =head2 parseArgs
 
 Once all parameters have been accepted (and, possibly, unaccepted), you must
 call parseArgs to perform the actual parsing.
-
-=cut
-
-sub parseArgs
-{
-    my $self = _self_or_global(shift);
-
-    # first, gather up for the call to Getopt::Long.
-    my %opts;
-    my $accept    = $self->{accept_opts};
-    my $unaccept  = $self->{unacceptable};
-    my @params = map {
-        my $param = join '|', $_, @{$accept->{$_}{aliases}};
-        $param . ($accept->{$_}{spec} || '');
-    } grep {
-        # skip unaccepted parameters
-        $unaccept and not $unaccept->{$_}
-    } keys %$accept;
-
-    # parse them
-    my $warnings;
-    my $success = do {
-        local $SIG{__WARN__} = sub { $warnings .= "@_";};
-        Getopt::Long::Configure("bundling");
-        GetOptions(\%opts, @params);
-    };
-    if (not $success)
-    {
-        Getopt::Modular::Exception->throw(
-             message => "Bad command-line: $warnings",
-            );
-    }
-    
-    # now validate everything that was passed in, and save it.
-    for my $opt (keys %$accept)
-    {
-        if (exists $opts{$opt})
-        {
-            $self->setOpt($opt, $opts{$opt});
-        }
-        # if it's mandatory, get it - that will call the default and
-        # set it.
-        elsif ($accept->{$opt}{mandatory})
-        {
-            # setting via default.
-            $self->getOpt($opt);
-        }
-    }
-}
 
 =head2 getOpt
 
@@ -659,174 +1074,6 @@ you should think twice about that: is it intuitive to the user that
 there should be a difference between "--foo 3" and not specifying --foo
 at all when the default is 3?
 
-=cut
-
-sub getOpt
-{
-    my $self = _self_or_global(shift);
-    my $opt  = shift || Getopt::Modular::Exception->throw(
-                                                          message => 'No option given?'
-                                                         );
-
-    if (not exists $self->{accept_opts}{$opt})
-    {
-        if ($self->{mode}{strict})
-        {
-            Getopt::Modular::Exception->throw(
-                                              message => "No such option: $opt",
-                                              option  => $opt,
-                                              value   => undef,
-                                             );
-        }
-    }
-
-    # If we don't have it yet, check if there's a default.
-    if (not exists $self->{options}{$opt} and
-        exists $self->{accept_opts}{$opt} and
-        exists $self->{accept_opts}{$opt}{default})
-    {
-        my @default = $self->{accept_opts}{$opt}{default};
-        if (ref $default[0] and ref $default[0] eq 'CODE')
-        {
-            @default = $default[0]->();
-        }
-        $self->setOpt($opt, @default);
-    }
-
-    # should have one now ... check and return
-    if (exists $self->{options}{$opt})
-    {
-        if (wantarray)
-        {
-            return ref $self->{options}{$opt} ? @{$self->{options}{$opt}} : $self->{options}{$opt};
-        }
-        return $self->{options}{$opt}
-    }
-
-    return;
-}
-
-sub _getType
-{
-    my $self = _self_or_global(shift);
-    my $opt  = shift;
-
-    unless (exists $self->_opt($opt)->{_GMTYPE})
-    {
-        my $type = $self->_opt($opt)->{spec};
-        $self->_opt($opt)->{_GMTYPE} = ''; #scalar
-        if ($type =~ /\@/)
-        {
-            $self->_opt($opt)->{_GMTYPE} = 'ARRAY';
-        }
-        elsif ($type =~ /\%/)
-        {
-            $self->_opt($opt)->{_GMTYPE} = 'HASH';
-        }
-    }
-    $self->_opt($opt)->{_GMTYPE}
-}
-
-sub _bool_val
-{
-    # technically, perl allows anything to be boolean.
-    #my ($opt,$val) = @_;
-}
-
-sub _int_val
-{
-    my ($opt,$val) = @_;
-    if ($val =~ /\D/)
-    {
-        Getopt::Modular::Exception->throw(
-                                          message => "Trying to set '$opt' (an integer-only parameter) to '$val'",
-                                          option  => $opt,
-                                          value   => $val
-                                         );
-    }
-}
-
-sub _real_val
-{
-    my ($opt,$val) = @_;
-
-    unless (looks_like_number $val)
-    {
-        Getopt::Modular::Exception->throw(
-                                          message => "Trying to set '$opt' (a real-number parameter) to '$val'",
-                                          option  => $opt,
-                                          value   => $val
-                                         );
-    }
-}
-
-my %_valtypes = (
-                 '!' => { val => \&_bool_val },
-                 '+' => { val => \&_int_val },
-                 's' => { val => sub {} },
-                 'i' => { val => \&_int_val },
-                 'o' => { val => \&_int_val },
-                 'f' => { val => \&_real_val },
-                );
-
-sub _setOpt
-{
-    my $self = _self_or_global(shift);
-    my $opt  = shift;
-    my $val  = shift;
-
-    # check known types before passing on to user-specified validation.
-
-    my $type = $self->_opt($opt)->{spec};
-    if ($type eq '' || $type eq '!') # boolean
-    {
-        _bool_val($opt,$val);
-        # extra information should not be stored in a boolean.
-        $val = !!$val;
-    }
-    else
-    {
-        for (split //, $type)
-        {
-            if (my $info = $_valtypes{$_})
-            {
-                if ($type =~ /\@/)
-                {
-                    $info->{val}->($opt,$_) for @$val;
-                }
-                elsif ($type =~ /\%/)
-                {
-                    $info->{val}->($opt,$_) for values %$val;
-                }
-                else
-                {
-                    $info->{val}->($opt,$val);
-                }
-            }
-        }
-    }
-
-    if ($self->_opt($opt)->{validate})
-    {
-        local $_ = $val;
-        unless ($self->_opt($opt)->{validate}->())
-        {
-            if (ref $val)
-            {
-                $val = join ',', @$val if ref $val eq 'ARRAY';
-                $val = join ',', map { "$_=$val->{$_}" } sort keys %$val if ref $val eq 'HASH';
-            }
-            Getopt::Modular::Exception->throw(
-                                              message => "'$val' is an invalid value for $opt",
-                                              option  => $opt,
-                                              value   => $val,
-                                             );
-        }
-    }
-
-    $self->{options}{$opt} = $val;
-}
-
 =head2 setOpt
 
 Programmatic changing of options.  This should not be done until after
@@ -836,40 +1083,6 @@ not by setting the option first.
 Note that this will pass the value through the validation code, if any, so
 be sure you set the values to something that make sense.  Will throw an
 exception if the value cannot be set, e.g., it is invalid.
-
-=cut
-
-sub setOpt
-{
-    my $self = _self_or_global(shift);
-    my $opt  = shift;
-    my $val  = do {
-        if (ref $_[0])
-        {
-            Getopt::Modular::Exception->throw(
-                                              message => "Wrong type of data for $opt.  Expected: " .
-                                              ($self->_getType($opt) || 'SCALAR') .
-                                              " got: " . (reftype $_[0] || 'SCALAR'),
-                                              opt => $opt,
-                                              value => $_[0],
-                                             )
-                unless $self->_getType($opt) eq reftype $_[0];
-
-            # if it's a reference, pass it in unchanged.
-            shift;
-        }
-        else
-        {
-            # scalars get passed in, but hashes and arrays need to
-            # be referencised.
-
-            ! $self->_getType($opt) ? shift  :
-                $self->_getType($opt) eq 'HASH'  ? { @_ } : [ @_ ];
-        }
-    };
-
-    $self->_setOpt($opt, $val);
-}
 
 =head2 getHelpRaw
 
@@ -900,140 +1113,109 @@ want to interpret this).
 
 =back
 
-=cut
-
-sub getHelpRaw
-{
-    my $self = _self_or_global(shift);
-
-    # get the list of parameters ...
-    my $accept    = $self->{accept_opts};
-    my $unaccept  = $self->{unacceptable};
-    my @params = sort grep {
-        # skip unaccepted parameters
-        $unaccept and not $unaccept->{$_}
-    } keys %$accept;
-
-    # start figuring it out.
-    my @raw;
-    for my $param (@params)
-    {
-        my %opt;
-
-        my $param_info = $accept->{$param};
-        my @keys = ($param, @{$param_info->{aliases}});
-
-        # booleans get the "no" version.
-        if ($param_info->{spec} =~ /!/)
-        {
-            @keys = map { length > 1 ? ($_, "no$_") : $_ } @keys;
-        }
-
-        # anything with more than one letter gets a double-dash.
-        @keys = map { length > 1 ? "--$_" : "-$_" } @keys;
-        $opt{param} = \@keys;
-
-        $opt{help} = ref $param_info->{help} ?
-            $param_info->{help}->() : $param_info->{help};
-
-        # determine default (or set value)
-        my $default;
-        eval {
-            $opt{default} = $self->getOpt($param);
-
-            my $type = $self->_opt($param)->{spec};
-            if ($type eq '' || $type eq '!') # boolean
-            {
-                my $bools = ( $self->_opt($param)->{help_bool} or $self->{bool_strings} );
-
-                $opt{default} = $bools->[$opt{default} ? 1 : 0];
-            }
-        };
-        push @raw, \%opt;
-    }
-    return @raw;
-}
-
 =head2 getHelp
 
-Returns a string representation of the above raw help.
+Returns a string representation of the above raw help.  If you need to
+translate extra strings, an extra hash-ref of callbacks will be used.  For
+example:
 
-=cut
+    GM->getHelp({
+        current_value => sub {
+            lookup_string("Current value: '[_1]'", shift // '');
+        },
+        # only needed if you use the valid_value key at the moment, but
+        # could be extended later.
+        valid_values => sub {
+            lookup_string("Valid values: '[_1]'", join ',', @_);
+        },
+    });
 
-sub getHelp
-{
-    my $self = _self_or_global(shift);
-    my @raw = $self->getHelpRaw;
+Callbacks:
 
-    require Text::Table;
+=over 4
 
-    my $tb = Text::Table->new();
-    for my $param (@raw)
-    {
-        my $opt = join ",\n  ", @{$param->{param}};
-        my $txt = $param->{help};
-        no warnings 'uninitialized';
-        $txt .= "\n Current Value: [" . $param->{default} . "]" if exists $param->{default};
+=item current_value
 
-        $tb->add($opt, $txt);
-    }
-    $tb;
-}
+Receives the current value (may be undef).
+
+=item valid_values
+
+Receives all valid values.
+
+=back
 
 =head2 getHelpWrap
 
-Similar to getHelp, this uses Text::Wrap to automatically wrap the text
-on for help, making it easier to write.
+Similar to getHelp, this uses L<Text::WrapI18N>, if available, otherwise
+L<Text::Wrap>, to automatically wrap the text on for help, making it easier
+to write.
 
 Default screen width is 80 - you can pass in the columns if you prefer.
 
-=cut
+A second parameter is the same as getHelp above with callbacks for translations.
 
-sub getHelpWrap
-{
-    my $self = _self_or_global(shift);
-    my $width = @_ ? shift : 80;
-    my @raw = $self->getHelpRaw;
+Examples:
 
-    require Text::Table;
-    require Text::Wrap;
+    print GM->getHelpWrap(70, { ... }); # specify cols and callbacks
+    print GM->getHelpWrap({ ... }); # implicit cols (80), explicit callbacks
+    print GM->getHelpWrap(70); # implicit cols, default English text
+    print GM->getHelpWrap(); # implicit all.
 
-    my $tb = Text::Table->new();
-    my $load_data = sub {
-        my $tb    = shift;
-        my $param = shift;
+=head1 EXCEPTIONS
 
-        my $opt = join ",\n  ", @{$param->{param}};
-        my $txt = shift;
-        no warnings 'uninitialized';
-        $txt .= "\n Current Value: [" . $param->{default} . "]" if exists $param->{default};
+Various exceptions can be thrown of either C<Getopt::Modular::Exception> or
+C<Getopt::Modular::Internal> types.  All exceptions have a "type" field which
+you can retrieve with the C<-E<gt>type> method (see L<Exception::Class>).  This
+is intended to facilitate translations.  Rather than using the exception message
+contained in this object, you can substitute with your own translated text.
 
-        $tb->add($opt, $txt);
-    };
+Exception types:
 
-    for my $param (@raw)
-    {
-        $load_data->($tb, $param, $param->{help});
-    }
+=over 4
 
-    if ($tb->width > $width)
-    {
-        # rebuild, wrapped.
-        my @colrange = $tb->colrange(0);
-        my $available = $width - $colrange[1];
-        local $Text::Wrap::columns = $available;
-        local $Text::Wrap::unexpand;
+=item unknown-option
 
-        $tb->clear();
-        for my $param (@raw)
-        {
-            my $help = Text::Wrap::wrap('', '', $param->{help});
-            $load_data->($tb, $param, $help);
-        }
-    }
+Internal error: an option was used, for example as one of the aliases, that didn't
+resolve.  I don't think this should happen.
 
-    $tb;
-}
+=item getopt-long-failure
+
+Getopt::Long returned a failure.  The warnings produced by Getopt::Long have been
+captured into the warnings of this exception (C<$e-E<gt>warnings>), but they are
+likely also English-only.
+
+=item dev-error
+
+getOpt didn't get any parameters.  Probably doesn't need translating unless
+you are doing something odd (but has a type so you I<can> do something odd).
+
+=item valid-values-error
+
+The valid_values key for an option wasn't either an array ref or a code ref.
+
+=item no-such-option
+
+Strict mode is on, and you asked getOpt for an option that G::M doesn't
+know about.
+
+=item set-int-failure
+
+Called setOpt on an integer value (types +, i, or o), without giving an integer.
+
+=item set-real-failure
+
+Called setOpt on an real value (type f), without giving a number.
+
+=item validate-failure
+
+The validation for this value failed.  The option and value fields are filled in.
+
+=item wrong-type
+
+When calling setOpt, trying to set a value of the wrong type (a hash reference to
+a list, for example)
+
+=back
 
 =head1 AUTHOR
 
@@ -1045,23 +1227,15 @@ Please report any bugs or feature requests to C<bug-getopt-modular at rt.cpan.or
 the web interface at L<http://rt.cpan.org/NoAuth/ReportBug.html?Queue=Getopt-Modular>.  I will be notified, and then you'll
 automatically be notified of progress on your bug as I make changes.
 
-
-
-
 =head1 SUPPORT
 
 You can find documentation for this module with the perldoc command.
 
     perldoc Getopt::Modular
 
-
 You can also look for information at:
 
 =over 4
-
-=item * SourceForge
-
-L<http://sourceforget.net/projects/getopt-modular>
 
 =item * RT: CPAN's request tracker
 
@@ -1081,18 +1255,25 @@ L<http://search.cpan.org/dist/Getopt-Modular>
 
 =back
 
-
 =head1 ACKNOWLEDGEMENTS
-
 
 =head1 COPYRIGHT & LICENSE
 
-Copyright 2008, 2011 Darin McBride, all rights reserved.
+Copyright 2008, 2012 Darin McBride, all rights reserved.
 
 This program is free software; you can redistribute it and/or modify it
 under the same terms as Perl itself.
 
+=head1 AUTHOR
+
+Darin McBride <dmcbride@cpan.org>
+
+=head1 COPYRIGHT AND LICENSE
+
+This software is copyright (c) 2012 by Darin McBride.
+
+This is free software; you can redistribute it and/or modify it under
+the same terms as the Perl 5 programming language system itself.
 
 =cut
 
-1; # End of Getopt::Modular
