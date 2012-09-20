@@ -1,6 +1,6 @@
 package Getopt::Modular;
 {
-  $Getopt::Modular::VERSION = '0.08';
+  $Getopt::Modular::VERSION = '0.09';
 }
 
 #ABSTRACT: Modular access to Getopt::Long
@@ -535,7 +535,7 @@ sub getHelpRaw
         my %opt;
 
         my $param_info = $accept->{$param};
-        my @keys = ($param, @{$param_info->{aliases}});
+        my @keys = ($param, @{$param_info->{aliases}||[]});
 
         # booleans get the "no" version.
         if ($param_info->{spec} =~ /!/)
@@ -574,6 +574,9 @@ sub getHelpRaw
             $opt{valid_values} = $opt{valid_values}->();
         };
 
+        # is it hidden?  It's still part of the raw output.
+        $opt{hidden} = $param_info->{hidden} if exists $param_info->{hidden};
+
         push @raw, \%opt;
     }
     return @raw;
@@ -583,7 +586,7 @@ sub getHelpRaw
 sub getHelp
 {
     my $self = _self_or_global(\@_);
-    my @raw = $self->getHelpRaw;
+    my @raw = grep { not $_->{hidden} } $self->getHelpRaw;
     my $cbs = shift || {};
 
     require Text::Table;
@@ -609,7 +612,7 @@ sub getHelpWrap
     my $self = _self_or_global(\@_);
     my $width = (@_ && not ref $_[0]) ? shift : 80;
     my $cbs = shift || {};
-    my @raw = $self->getHelpRaw;
+    my @raw = grep { not $_->{hidden} } $self->getHelpRaw;
 
     require Text::Table;
 
@@ -680,7 +683,7 @@ Getopt::Modular - Modular access to Getopt::Long
 
 =head1 VERSION
 
-version 0.08
+version 0.09
 
 =head1 SYNOPSIS
 
@@ -1038,6 +1041,12 @@ code is called during the parsing of arguments even if the parameter was not
 passed in on the command line.  If you have no default and your validate
 rejects an empty value, this can, in effect, make the parameter mandatory for
 the user.
+
+=item hidden
+
+If this is set to a true value, then C<getHelp> and C<getHelpWrap>,
+but not C<getHelpRaw>, will not return this item in its output.  Useful
+for debugging or other "internal" parameters.
 
 =back
 

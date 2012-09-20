@@ -15,7 +15,7 @@ my %WriteMakefileArgs = (
     "Data::Dumper" => 0,
     "Module::Build" => "0.3601",
     "Test::Exception" => 0,
-    "Test::More" => 0
+    "Test::More" => "0.88"
   },
   "CONFIGURE_REQUIRES" => {
     "Module::Build" => "0.3601"
@@ -36,7 +36,7 @@ my %WriteMakefileArgs = (
     "strict" => 0,
     "warnings" => 0
   },
-  "VERSION" => "0.08",
+  "VERSION" => "0.09",
   "test" => {
     "TESTS" => "t/*.t"
   }
