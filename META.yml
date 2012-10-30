@@ -29,4 +29,4 @@ requires:
   warnings: 0
 resources:
   repository: git://github.com/dmcbride/Getopt-Modular.git
-version: 0.09
+version: 0.10

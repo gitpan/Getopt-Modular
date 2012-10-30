@@ -20,7 +20,7 @@ my %module_build_args = (
     "Darin McBride <dmcbride\@cpan.org>"
   ],
   "dist_name" => "Getopt-Modular",
-  "dist_version" => "0.09",
+  "dist_version" => "0.10",
   "license" => "perl",
   "module_name" => "Getopt::Modular",
   "recommends" => {},
