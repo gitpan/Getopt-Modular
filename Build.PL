@@ -9,6 +9,7 @@ my %module_build_args = (
   "build_requires" => {
     "Data::Dumper" => 0,
     "Module::Build" => "0.3601",
+    "Test::Deep" => 0,
     "Test::Exception" => 0,
     "Test::More" => "0.88"
   },
@@ -20,7 +21,7 @@ my %module_build_args = (
     "Darin McBride <dmcbride\@cpan.org>"
   ],
   "dist_name" => "Getopt-Modular",
-  "dist_version" => "0.10",
+  "dist_version" => "0.11",
   "license" => "perl",
   "module_name" => "Getopt::Modular",
   "recommends" => {},
