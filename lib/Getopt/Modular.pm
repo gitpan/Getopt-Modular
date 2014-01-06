@@ -1,6 +1,6 @@
 package Getopt::Modular;
 {
-  $Getopt::Modular::VERSION = '0.11';
+  $Getopt::Modular::VERSION = '0.12';
 }
 
 #ABSTRACT: Modular access to Getopt::Long
@@ -84,7 +84,7 @@ sub _self_or_global
     eval { ref $self && $self->isa(__PACKAGE__) } && return shift @$underscore;
 
     # passed in via class method?  skip it.
-    eval { not ref && $self->isa(__PACKAGE__) } && shift @$underscore;
+    eval { not ref $self && $self->isa(__PACKAGE__) } && shift @$underscore;
 
     # have global? use it.
     $global ? $global :
@@ -706,7 +706,7 @@ Getopt::Modular - Modular access to Getopt::Long
 
 =head1 VERSION
 
-version 0.11
+version 0.12
 
 =head1 SYNOPSIS
 
@@ -1317,7 +1317,7 @@ Darin McBride <dmcbride@cpan.org>
 
 =head1 COPYRIGHT AND LICENSE
 
-This software is copyright (c) 2013 by Darin McBride.
+This software is copyright (c) 2014 by Darin McBride.
 
 This is free software; you can redistribute it and/or modify it under
 the same terms as the Perl 5 programming language system itself.
